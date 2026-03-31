@@ -171,6 +171,151 @@ def get_data_for_test(test, title=None) -> Dict[str, Any]:
     }
 
 
+def _format_timestamp(timestamp) -> str | None:
+    """Format timestamps for the run-manifest PoC."""
+    if timestamp is None:
+        return None
+    return timestamp.strftime('%Y-%m-%d %H:%M:%S (%Z)')
+
+
+def _result_file_has_diff(result_file: TestResultFile) -> bool:
+    """Check if a result file has a meaningful diff."""
+    if result_file.got is None:
+        return False
+
+    for output_file in result_file.regression_test_output.multiple_files:
+        if result_file.got == output_file.file_hashes:
+            return False
+
+    return True
+
+
+def build_run_manifest(test: Test) -> Dict[str, Any]:
+    """
+    Build a read-only run manifest from the current data model.
+
+    This is a PoC helper. It does not add new tables yet. It proves that the
+    existing Test, TestProgress, TestResult, and TestResultFile data can already
+    be shaped into one run-centric response.
+    """
+    from run import config
+
+    progress_entries = [{
+        'timestamp': _format_timestamp(entry.timestamp),
+        'status': entry.status.value,
+        'label': entry.status.description,
+        'message': entry.message,
+    } for entry in test.progress]
+
+    started_at = test.progress[0].timestamp if len(test.progress) > 0 else None
+    finished_at = test.progress[-1].timestamp if test.finished else None
+
+    result_files = TestResultFile.query.filter(TestResultFile.test_id == test.id).order_by(
+        TestResultFile.regression_test_id.asc(),
+        TestResultFile.regression_test_output_id.asc()
+    ).all()
+    files_by_regression: Dict[int, List[TestResultFile]] = {}
+    for result_file in result_files:
+        files_by_regression.setdefault(result_file.regression_test_id, []).append(result_file)
+
+    artifacts = []
+    log_file_path = os.path.join(config.get('SAMPLE_REPOSITORY', ''), 'LogFiles', f'{test.id}.txt')
+    if os.path.isfile(log_file_path):
+        artifacts.append({
+            'kind': 'build_log',
+            'label': f'Build log for test {test.id}',
+            'download_url': url_for('test.download_build_log_file', test_id=test.id),
+        })
+
+    regression_entries = []
+    passed = 0
+    failed = 0
+
+    for result in sorted(test.results, key=lambda entry: entry.regression_test_id):
+        files = files_by_regression.get(result.regression_test_id, [])
+        diff_files = [result_file for result_file in files if _result_file_has_diff(result_file)]
+        status = 'fail' if result.exit_code != result.expected_rc or len(diff_files) > 0 else 'pass'
+        if status == 'pass':
+            passed += 1
+        else:
+            failed += 1
+
+        regression_entries.append({
+            'regression_test_id': result.regression_test_id,
+            'runtime': result.runtime,
+            'exit_code': result.exit_code,
+            'expected_rc': result.expected_rc,
+            'status': status,
+            'artifact_count': len(files),
+            'diff_count': len(diff_files),
+            'diff_download_url': None if len(diff_files) == 0 else url_for(
+                'test.generate_diff',
+                test_id=test.id,
+                regression_test_id=diff_files[0].regression_test_id,
+                output_id=diff_files[0].regression_test_output_id,
+                to_view=0,
+            ),
+        })
+
+        for result_file in files:
+            artifacts.append({
+                'kind': 'result_file',
+                'label': (
+                    f"Regression {result_file.regression_test_id}, "
+                    f"output {result_file.regression_test_output_id}"
+                ),
+                'regression_test_id': result_file.regression_test_id,
+                'output_id': result_file.regression_test_output_id,
+                'expected_hash': result_file.expected,
+                'got_hash': result_file.got,
+                'diff_download_url': None if not _result_file_has_diff(result_file) else url_for(
+                    'test.generate_diff',
+                    test_id=test.id,
+                    regression_test_id=result_file.regression_test_id,
+                    output_id=result_file.regression_test_output_id,
+                    to_view=0,
+                ),
+            })
+
+    selected_regression_ids = test.get_customized_regressiontests()
+
+    return {
+        'test_id': test.id,
+        'title': f'test {test.id}',
+        'platform': test.platform.value,
+        'platform_label': test.platform.description,
+        'test_type': test.test_type.value,
+        'test_type_label': test.test_type.description,
+        'status': test.progress[-1].status.value if len(test.progress) > 0 else TestStatus.preparation.value,
+        'status_label': test.progress[-1].status.description if len(test.progress) > 0 else TestStatus.preparation.description,
+        'branch': test.branch,
+        'commit': test.commit,
+        'pr_nr': test.pr_nr,
+        'github_link': test.github_link,
+        'repository_url': None if test.fork is None else test.fork.github_url,
+        'repository_name': None if test.fork is None else test.fork.github_name,
+        'selected_regression_ids': selected_regression_ids,
+        'started_at': _format_timestamp(started_at),
+        'finished_at': _format_timestamp(finished_at),
+        'sample_progress': {
+            'current': len(test.results),
+            'total': len(selected_regression_ids),
+            'percentage': 0 if len(selected_regression_ids) == 0 else int((len(test.results) / len(selected_regression_ids)) * 100),
+        },
+        'summary': {
+            'passed': passed,
+            'failed': failed,
+            'pending': max(len(selected_regression_ids) - len(test.results), 0),
+            'artifacts': len(artifacts),
+        },
+        'artifacts': artifacts,
+        'regressions': regression_entries,
+        'progress_events': progress_entries,
+        'detail_page_url': url_for('test.by_id', test_id=test.id),
+        'json_url': url_for('test.run_manifest_json', test_id=test.id),
+    }
+
+
 @mod_test.route('/get_json_data/<test_id>')
 def get_json_data(test_id):
     """
@@ -233,6 +378,34 @@ def by_id(test_id):
         raise TestNotFoundException(f"Test with id {test_id} does not exist")
 
     return get_data_for_test(test)
+
+
+@mod_test.route('/run_manifest/<test_id>')
+@template_renderer('test/run_manifest.html')
+def run_manifest(test_id):
+    """Show a read-only run overview page for the PoC."""
+    test = Test.query.filter(Test.id == test_id).first()
+    if test is None:
+        g.log.error(f"test with id: {test_id} not found!")
+        raise TestNotFoundException(f"Test with id {test_id} does not exist")
+
+    return {
+        'manifest': build_run_manifest(test),
+    }
+
+
+@mod_test.route('/run_manifest/<test_id>/json')
+def run_manifest_json(test_id):
+    """Return the PoC run manifest as JSON."""
+    test = Test.query.filter(Test.id == test_id).first()
+    if test is None:
+        g.log.error(f'test with id: {test_id} not found!')
+        return jsonify({'status': 'failure', 'error': 'Test not found'})
+
+    return jsonify({
+        'status': 'success',
+        'manifest': build_run_manifest(test),
+    })
 
 
 @mod_test.route('/ccextractor/<ccx_version>')

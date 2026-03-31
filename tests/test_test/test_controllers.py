@@ -110,6 +110,63 @@ class TestControllers(BaseTestCase):
         self.assertEqual(response.json['status'], 'failure')
         self.assertEqual(response.json['error'], 'Test not found')
 
+    def test_run_manifest_json_not_found(self):
+        """Test if run_manifest_json throws Error 404."""
+        response = self.app.test_client().get('/test/run_manifest/99999/json')
+        self.assertEqual(response.json['status'], 'failure')
+        self.assertEqual(response.json['error'], 'Test not found')
+
+    def test_run_manifest_json(self):
+        """Test the read-only run manifest json PoC endpoint."""
+        self.create_user_with_role(
+            self.user.name, self.user.email, self.user.password, Role.tester)
+        self.create_forktest("own-fork-commit", TestPlatform.linux, regression_tests=[2])
+        self.create_completed_regression_t_entries(3, [2])
+
+        response = self.app.test_client().get('/test/run_manifest/3/json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['status'], 'success')
+        manifest = response.json['manifest']
+        self.assertEqual(manifest['test_id'], 3)
+        self.assertEqual(manifest['platform'], 'linux')
+        self.assertEqual(manifest['summary']['passed'], 1)
+        self.assertEqual(manifest['summary']['failed'], 0)
+        self.assertEqual(manifest['selected_regression_ids'], [2])
+        self.assertEqual(len(manifest['progress_events']), 3)
+
+    def test_run_manifest_json_includes_diff_download(self):
+        """Test manifest includes a diff artifact when output differs."""
+        from flask import g
+
+        self.create_user_with_role(
+            self.user.name, self.user.email, self.user.password, Role.tester)
+        self.create_forktest("own-fork-commit", TestPlatform.linux, regression_tests=[2])
+        self.create_completed_regression_t_entries(3, [2])
+        result_file = TestResultFile.query.filter(TestResultFile.test_id == 3).first()
+        result_file.got = 'mismatch-hash'
+        g.db.commit()
+
+        response = self.app.test_client().get('/test/run_manifest/3/json')
+
+        self.assertEqual(response.status_code, 200)
+        manifest = response.json['manifest']
+        self.assertEqual(manifest['summary']['failed'], 1)
+        self.assertTrue(manifest['regressions'][0]['diff_download_url'].endswith('/test/diff/3/2/2/0'))
+
+    def test_run_manifest_page_loads(self):
+        """Test the run overview page for the PoC."""
+        self.create_user_with_role(
+            self.user.name, self.user.email, self.user.password, Role.tester)
+        self.create_forktest("own-fork-commit", TestPlatform.linux, regression_tests=[2])
+        self.create_completed_regression_t_entries(3, [2])
+
+        response = self.app.test_client().get('/test/run_manifest/3')
+
+        self.assertEqual(response.status_code, 200)
+        self.assert_template_used('test/run_manifest.html')
+        self.assertIn(b'Run overview for test 3', response.data)
+
     def test_get_nonexistent_test(self):
         """Test if it'll return a 404 on a non existent test."""
         response = self.app.test_client().get('/test/99999')

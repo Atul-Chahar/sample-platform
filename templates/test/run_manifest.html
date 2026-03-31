@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block title %}Run overview for {{ manifest.title }} {{ super() }}{% endblock %}
+
+{% block styles %}
+    {{ super() }}
+    <style>
+        .run-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .run-summary-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #ffffff;
+            padding: 14px 16px;
+        }
+        .run-summary-label {
+            color: #6b7280;
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+        }
+        .run-summary-value {
+            color: #111827;
+            font-size: 28px;
+            font-weight: 700;
+            line-height: 1;
+        }
+        .run-meta-table td:first-child {
+            color: #4b5563;
+            width: 190px;
+        }
+    </style>
+{% endblock %}
+
+{% block body %}
+    {{ super() }}
+    <br />
+    <div class="grid-x">
+        <div class="column medium-10 large-9">
+            <h1>Run overview for {{ manifest.title }}</h1>
+            <p>
+                This page is the Sample Platform NG PoC. It reshapes the current
+                test data into one run-centric view without changing the existing
+                execution path.
+            </p>
+            <p>
+                <a class="button small" href="{{ manifest.json_url }}">Open JSON manifest</a>
+                <a class="button hollow small" href="{{ manifest.detail_page_url }}">Open current detailed test page</a>
+            </p>
+
+            <div class="run-summary-grid">
+                <div class="run-summary-card">
+                    <span class="run-summary-label">Passed</span>
+                    <span class="run-summary-value">{{ manifest.summary.passed }}</span>
+                </div>
+                <div class="run-summary-card">
+                    <span class="run-summary-label">Failed</span>
+                    <span class="run-summary-value">{{ manifest.summary.failed }}</span>
+                </div>
+                <div class="run-summary-card">
+                    <span class="run-summary-label">Pending</span>
+                    <span class="run-summary-value">{{ manifest.summary.pending }}</span>
+                </div>
+                <div class="run-summary-card">
+                    <span class="run-summary-label">Artifacts</span>
+                    <span class="run-summary-value">{{ manifest.summary.artifacts }}</span>
+                </div>
+            </div>
+
+            <h2>Run metadata</h2>
+            <table class="tight run-meta-table">
+                <tbody>
+                    <tr><td>Status</td><td>{{ manifest.status_label }}</td></tr>
+                    <tr><td>Platform</td><td>{{ manifest.platform_label }}</td></tr>
+                    <tr><td>Type</td><td>{{ manifest.test_type_label }}</td></tr>
+                    <tr><td>Commit</td><td>{{ manifest.commit }}</td></tr>
+                    <tr><td>Branch</td><td>{{ manifest.branch }}</td></tr>
+                    <tr><td>PR</td><td>{{ manifest.pr_nr }}</td></tr>
+                    <tr><td>Started</td><td>{{ manifest.started_at or '-' }}</td></tr>
+                    <tr><td>Finished</td><td>{{ manifest.finished_at or '-' }}</td></tr>
+                    <tr><td>Repository</td><td>{% if manifest.repository_url %}<a href="{{ manifest.repository_url }}" target="_blank">{{ manifest.repository_name }}</a>{% else %}-{% endif %}</td></tr>
+                    <tr><td>GitHub link</td><td><a href="{{ manifest.github_link }}" target="_blank">{{ manifest.github_link }}</a></td></tr>
+                    <tr><td>Selected regressions</td><td>{{ manifest.selected_regression_ids|join(', ') if manifest.selected_regression_ids else '-' }}</td></tr>
+                    <tr><td>Sample progress</td><td>{{ manifest.sample_progress.current }} / {{ manifest.sample_progress.total }} ({{ manifest.sample_progress.percentage }}%)</td></tr>
+                </tbody>
+            </table>
+
+            <h2>Regression summary</h2>
+            {% if manifest.regressions %}
+            <table class="tight striped">
+                <thead>
+                    <tr>
+                        <th>Regression</th>
+                        <th>Runtime (ms)</th>
+                        <th>Exit code</th>
+                        <th>Status</th>
+                        <th>Artifacts</th>
+                        <th>Diff</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for entry in manifest.regressions %}
+                    <tr>
+                        <td>{{ entry.regression_test_id }}</td>
+                        <td>{{ entry.runtime }}</td>
+                        <td>{{ entry.exit_code }}{% if entry.exit_code != entry.expected_rc %} (expected {{ entry.expected_rc }}){% endif %}</td>
+                        <td>{{ entry.status }}</td>
+                        <td>{{ entry.artifact_count }}</td>
+                        <td>
+                            {% if entry.diff_download_url %}
+                                <a href="{{ entry.diff_download_url }}">Download diff</a>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p>No regression results are available yet.</p>
+            {% endif %}
+
+            <h2>Artifacts</h2>
+            {% if manifest.artifacts %}
+            <table class="tight striped">
+                <thead>
+                    <tr>
+                        <th>Kind</th>
+                        <th>Label</th>
+                        <th>Download</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for artifact in manifest.artifacts %}
+                    <tr>
+                        <td>{{ artifact.kind }}</td>
+                        <td>{{ artifact.label }}</td>
+                        <td>
+                            {% if artifact.download_url %}
+                                <a href="{{ artifact.download_url }}">Open</a>
+                            {% elif artifact.diff_download_url %}
+                                <a href="{{ artifact.diff_download_url }}">Open</a>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p>No artifacts are available yet.</p>
+            {% endif %}
+
+            <h2>Progress events</h2>
+            {% if manifest.progress_events %}
+            <table class="tight striped">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Status</th>
+                        <th>Message</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for entry in manifest.progress_events %}
+                    <tr>
+                        <td>{{ entry.timestamp }}</td>
+                        <td>{{ entry.label }}</td>
+                        <td>{{ entry.message }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p>No progress events are available yet.</p>
+            {% endif %}
+        </div>
+    </div>
+{% endblock %}
